@@ -1,16 +1,29 @@
-# This is a sample Python script.
+from vectordb import VectorDB
+from sentence_transformers import SentenceTransformer
 
-# Press Ctrl+F5 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
-
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press F9 to toggle the breakpoint.
+db = VectorDB()
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+model=SentenceTransformer("all-MiniLM-L6-v2")
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+documents = [
+    "Python is used for data analysis.",
+    "SQL is used to query relational databases.",
+    "Apache Spark processes large datasets.",
+    "React is used to build web interfaces."
+]
+
+for doc in documents:
+    vector = model.encode(doc)
+    db.add(doc,vector,{"source": "learning_notes.txt"})
+    db.save()
+
+query = "What can I use for analyzing data?"
+
+query_vector = model.encode(query)
+
+results = db.search(query_vector, k=2)
+
+for document, score, metadata in results:
+    print(f"{score:.4f} -> {document}")
+    print(f"Metadata: {metadata}")
