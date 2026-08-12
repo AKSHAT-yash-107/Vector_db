@@ -1,22 +1,10 @@
-from vectordb import VectorDB
 from sentence_transformers import SentenceTransformer
+from vectordb import VectorDB
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 db = VectorDB()
-
-
-model=SentenceTransformer("all-MiniLM-L6-v2")
-
-documents = [
-    "Python is used for data analysis.",
-    "SQL is used to query relational databases.",
-    "Apache Spark processes large datasets.",
-    "React is used to build web interfaces."
-]
-
-for doc in documents:
-    vector = model.encode(doc)
-    db.add(doc,vector,{"source": "learning_notes.txt"})
-    db.save()
+db.load()
 
 query = "What can I use for analyzing data?"
 

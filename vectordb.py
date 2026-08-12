@@ -1,16 +1,28 @@
 import json
 import numpy as np
-
+import hnswlib
 class VectorDB:
     def __init__(self):
         self.document = []
         self.vector = []
         self.metadata = []
+        self.index=hnswlib.Index(
+            space="cosine",
+            dim=384
+        )
+        self.index.init_index(
+            max_elements=10000,
+            ef_construction=200,
+            M=16
+        )
 
     def add(self,documents,vector,metadata=None):
+        vectors = np.array(vector,dtype=np.float32)
+        idx=len(self.vector)
         self.document.append(documents)
         self.vector.append(np.asarray(vector))
         self.metadata.append(metadata)
+        self.index.add_items(vectors,idx)
 
     def save(self, filename="vector_db.json"):
         data = {
@@ -27,20 +39,48 @@ class VectorDB:
             data = json.load(file)
 
         self.document = data["document"]
-        self.vector = [np.array(vector) for vector in data["vector"]]
+        self.vector= [
+            np.array(vector, dtype=np.float32)
+            for vector in data["vector"]
+        ]
         self.metadata = data["metadata"]
 
-    def search(self, query_vector, k=2):
-        vectors = np.array(self.vector)
-
-        similarities = np.dot(vectors, query_vector) / (
-                np.linalg.norm(vectors, axis=1)
-                * np.linalg.norm(query_vector)
+        # Rebuild HNSW index
+        self.index = hnswlib.Index(
+            space="cosine",
+            dim=384
         )
 
-        indices = np.argsort(similarities)[::-1][:k]
+        self.index.init_index(
+            max_elements=10000,
+            ef_construction=200,
+            M=16
+        )
 
-        return [
-            (self.document[i], similarities[i], self.metadata[i])
-            for i in indices
-        ]
+        vectors = np.array(self.vector, dtype=np.float32)
+        ids = np.arange(len(vectors))
+
+        self.index.add_items(vectors, ids)
+
+    def search(self, query_vector, k=2):
+        query_vector=np.asarray(
+            query_vector,
+            dtype=np.float32
+        )
+        labels,distances=self.index.knn_query(
+            query_vector,
+            k=k
+        )
+
+        result=[]
+        for i in range (len(labels[0])):
+            idx=labels[0][i]
+            distance=distances[0][i]
+            similarity=1-distance
+
+            result.append((
+                self.document[idx],
+                similarity,
+                self.metadata[idx]
+            ))
+        return result
