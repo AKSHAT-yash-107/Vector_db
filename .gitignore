@@ -1,0 +1,9 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+
+vector_db.json
+*.json
+
+.pytest_cache/
