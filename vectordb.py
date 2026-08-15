@@ -1,6 +1,7 @@
 import json
 import numpy as np
 import hnswlib
+import os
 class VectorDB:
     def __init__(self):
         self.document = []
@@ -55,6 +56,8 @@ class VectorDB:
             json.dump(data, file)
 
     def load(self, filename="vector_db.json"):
+        if not os.path.exists(filename):
+            return
 
         with open(filename, "r") as file:
             data = json.load(file)
@@ -99,14 +102,17 @@ class VectorDB:
             )
 
         self.next_index_id = max(self.index_ids.values(), default=-1) + 1
-    def search(self, query_vector, k=2):
+
+    def search(self, query_vector, k=2, filter=None):
 
         self.index.set_ef(max(50, k))
-        query_vector=np.asarray(
+
+        query_vector = np.asarray(
             query_vector,
             dtype=np.float32
         )
-        labels,distances=self.index.knn_query(
+
+        labels, distances = self.index.knn_query(
             query_vector,
             k=k
         )
@@ -119,6 +125,20 @@ class VectorDB:
 
             if self.document[idx] is None:
                 continue
+
+            # Metadata filtering
+            if filter is not None:
+
+                match = True
+
+                for key, value in filter.items():
+
+                    if self.metadata[idx].get(key) != value:
+                        match = False
+                        break
+
+                if not match:
+                    continue
 
             distance = distances[0][i]
             similarity = 1 - distance
