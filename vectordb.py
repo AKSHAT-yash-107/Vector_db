@@ -3,17 +3,22 @@ import numpy as np
 import hnswlib
 import os
 
+
+
+
 class VectorDB:
     def __init__(self):
         self.document = []
         self.vector = []
         self.metadata = []
+        self.max_elements = 10000
+        self.dimension = 384
         self.index=hnswlib.Index(
             space="cosine",
-            dim=384
+            dim=self.dimension
         )
         self.index.init_index(
-            max_elements=10000,
+            max_elements=self.max_elements,
             ef_construction=200,
             M=16
         )
@@ -23,6 +28,15 @@ class VectorDB:
         self.hnsw_to_doc = {}
 
     def add(self, document, vector, metadata=None):
+
+        valid, error = self.valid_doc(
+            document,
+            vector,
+            metadata
+        )
+
+        if not valid:
+            raise ValueError(error)
 
         vector = np.asarray(vector, dtype=np.float32)
 
@@ -39,7 +53,8 @@ class VectorDB:
         )
 
         self.index_ids[doc_id] = index_id
-        self.hnsw_to_doc[index_id] = doc_id ## filtering during ann traversal
+        self.hnsw_to_doc[index_id] = doc_id
+
         self.next_index_id += 1
 
         return doc_id
@@ -227,3 +242,141 @@ class VectorDB:
                 return False
 
         return True
+
+    def valid_doc(self, document, vector, metadata):
+        if document is None or not isinstance(document, str):
+            return False, "Invalid document"
+        if not document.strip():
+            return False, "Document is empty"
+        if vector is None:
+            return False, "Vector is missing"
+        try:
+            vector = np.asarray(vector, dtype=np.float32)
+        except (ValueError, TypeError):
+            return False, "Vector could not be converted to a numeric array"
+        if vector.ndim != 1:
+            return False, "Vector must be 1-dimensional"
+        if vector.shape[0] != self.dimension:
+            return False, "Invalid vector dimension"
+        if not np.all(np.isfinite(vector)):
+            return False, "Vector contains NaN or Inf values"
+        if np.linalg.norm(vector) == 0:
+            return False, "Vector is a zero vector"
+        if metadata is not None and not isinstance(metadata, dict):
+            return False, "Metadata must be a dictionary"
+        return True, None
+
+    def add_batch(self, documents, vectors, metadata):
+
+        # 1. Validate batch structure
+        if not (
+                len(documents)
+                == len(vectors)
+                == len(metadata)
+        ):
+            raise ValueError(
+                "documents, vectors and metadata must have the same length"
+            )
+
+        valid_docs = []
+        errors = []
+
+        # 2. Validate every document independently
+        for i in range(len(documents)):
+
+            document = documents[i]
+            vector = vectors[i]
+            meta = metadata[i]
+
+            valid, error = self.valid_doc(
+                document,
+                vector,
+                meta
+            )
+
+            if not valid:
+                errors.append({
+                    "index": i,
+                    "reason": error
+                })
+                continue
+
+            vector = np.asarray(
+                vector,
+                dtype=np.float32
+            )
+
+            valid_docs.append(
+                (document, vector, meta)
+            )
+
+        # 3. Nothing valid
+        if not valid_docs:
+            return {
+                "added": 0,
+                "failed": len(errors),
+                "errors": errors,
+                "added_ids": []
+            }
+
+        # 4. Number of valid vectors
+        n = len(valid_docs)
+
+        # 5. Check HNSW capacity
+        if self.index.get_current_count() + n > self.max_elements:
+            raise ValueError(
+                "HNSW index capacity exceeded"
+            )
+
+        # 6. Build one NumPy matrix
+        batch_vectors = np.asarray(
+            [item[1] for item in valid_docs],
+            dtype=np.float32
+        )
+
+        # 7. Allocate HNSW labels
+        start_index_id = self.next_index_id
+
+        new_index_ids = np.arange(
+            start_index_id,
+            start_index_id + n
+        )
+
+        # 8. ONE bulk HNSW insertion
+        self.index.add_items(
+            batch_vectors,
+            new_index_ids
+        )
+
+        # 9. Update storage and mappings
+        added_ids = []
+
+        for (document, vector, meta), index_id in zip(
+                valid_docs,
+                new_index_ids
+        ):
+            # Same ID allocation model as add()
+            doc_id = len(self.document)
+
+            self.document.append(document)
+            self.vector.append(vector)
+            self.metadata.append(meta)
+
+            # Convert NumPy integer → Python int
+            index_id = int(index_id)
+
+            # Both directions
+            self.index_ids[doc_id] = index_id
+            self.hnsw_to_doc[index_id] = doc_id
+
+            added_ids.append(doc_id)
+
+        # 10. Advance HNSW ID counter
+        self.next_index_id += n
+
+        return {
+            "added": n,
+            "failed": len(errors),
+            "errors": errors,
+            "added_ids": added_ids
+        }
