@@ -63,26 +63,52 @@ class VectorDB:
 
         data = {
             "document": self.document,
+
             "vector": [
                 vector.tolist() if vector is not None else None
                 for vector in self.vector
             ],
-            "metadata": self.metadata
+
+            "metadata": self.metadata,
+
+            "index_ids": {
+                str(doc_id): int(index_id)
+                for doc_id, index_id in self.index_ids.items()
+            },
+
+            "next_index_id": self.next_index_id,
+
+            "dimension": self.dimension,
+
+            "max_elements": self.max_elements
         }
 
         with open(filename, "w") as file:
             json.dump(data, file)
 
     def load(self, filename="vector_db.json"):
+
         if not os.path.exists(filename):
             return
 
         with open(filename, "r") as file:
             data = json.load(file)
 
+        # Restore configuration
+        self.dimension = data.get(
+            "dimension",
+            self.dimension
+        )
+
+        self.max_elements = data.get(
+            "max_elements",
+            self.max_elements
+        )
+
+        # Restore storage
         self.document = data["document"]
 
-        self.vector= [
+        self.vector = [
             np.array(vector, dtype=np.float32)
             if vector is not None
             else None
@@ -91,38 +117,92 @@ class VectorDB:
 
         self.metadata = data["metadata"]
 
-        # Rebuild HNSW index
+        # Restore document → HNSW mapping
+        self.index_ids = {
+            int(doc_id): int(index_id)
+            for doc_id, index_id in data.get(
+                "index_ids",
+                {}
+            ).items()
+        }
+
+        # Rebuild reverse mapping
+        self.hnsw_to_doc = {
+            index_id: doc_id
+            for doc_id, index_id in self.index_ids.items()
+        }
+
+        # Restore next HNSW ID
+        self.next_index_id = data.get(
+            "next_index_id",
+            0
+        )
+
+        # Rebuild HNSW
         self.index = hnswlib.Index(
             space="cosine",
-            dim=384
+            dim=self.dimension
         )
 
         self.index.init_index(
-            max_elements=10000,
+            max_elements=self.max_elements,
             ef_construction=200,
             M=16
         )
 
+        self.index.set_ef(50)
+
         active_vectors = []
         active_ids = []
 
-        for i, vector in enumerate(self.vector):
+        for doc_id, vector in enumerate(self.vector):
 
-            if vector is not None:
-                active_vectors.append(vector)
-                active_ids.append(i)
-                self.index_ids[i] = i
-                self.hnsw_to_doc[i] = i
+            if vector is None:
+                continue
+
+            index_id = self.index_ids[doc_id]
+
+            active_vectors.append(vector)
+            active_ids.append(index_id)
 
         if active_vectors:
             self.index.add_items(
-                np.array(active_vectors, dtype=np.float32),
-                np.array(active_ids)
+                np.asarray(
+                    active_vectors,
+                    dtype=np.float32
+                ),
+                np.asarray(
+                    active_ids,
+                    dtype=np.int64
+                )
             )
 
-        self.next_index_id = max(self.index_ids.values(), default=-1) + 1
-
     def search(self, query_vector, k=2, filter=None):
+        if k <= 0:
+            return []
+
+        if query_vector is None:
+            raise ValueError("Query vector is missing")
+
+        query_vector = np.asarray(
+            query_vector,
+            dtype=np.float32
+        )
+
+        if query_vector.ndim != 1:
+            raise ValueError("Query vector must be 1-dimensional")
+
+        if query_vector.shape[0] != self.dimension:
+            raise ValueError("Invalid query vector dimension")
+
+        if not np.all(np.isfinite(query_vector)):
+            raise ValueError("Query vector contains NaN or Inf")
+
+        if np.linalg.norm(query_vector) == 0:
+            raise ValueError("Query vector is a zero vector")
+
+        if self.index.get_current_count() == 0:
+            return []
 
         self.index.set_ef(max(50, k))
 
@@ -140,12 +220,18 @@ class VectorDB:
                     filter
                 )
 
+        search_k = min(
+            k,
+            self.index.get_current_count()
+        )
+
         labels, distances = self.index.knn_query(
             query_vector,
-            k=k,
+            k=search_k,
             num_threads=1,
             filter=filter_fn
         )
+
 
         results = []
 
@@ -187,46 +273,74 @@ class VectorDB:
         if doc_id < 0 or doc_id >= len(self.document):
             return False
 
-        self.index.mark_deleted(doc_id)
+        if self.document[doc_id] is None:
+            return False
+
+        index_id = self.index_ids[doc_id]
+
+        self.index.mark_deleted(index_id)
 
         self.document[doc_id] = None
         self.vector[doc_id] = None
         self.metadata[doc_id] = None
 
+        del self.hnsw_to_doc[index_id]
+        del self.index_ids[doc_id]
+
         return True
 
     def update(self, doc_id, document, vector, metadata=None):
 
+        # 1. Check document ID
         if doc_id < 0 or doc_id >= len(self.document):
             return False
 
         if self.document[doc_id] is None:
             return False
 
-        # Old HNSW entry
-        old_index_id = self.index_ids[doc_id]
+        # 2. Validate new record BEFORE modifying anything
+        valid, error = self.valid_doc(
+            document,
+            vector,
+            metadata
+        )
 
-        self.index.mark_deleted(old_index_id)
+        if not valid:
+            raise ValueError(error)
 
         vector = np.asarray(
             vector,
             dtype=np.float32
         )
 
+        # 3. Get old HNSW label
+        old_index_id = self.index_ids[doc_id]
+
+        # 4. Soft-delete old HNSW entry
+        self.index.mark_deleted(old_index_id)
+
+        # 5. Remove old reverse mapping
+        del self.hnsw_to_doc[old_index_id]
+
+        # 6. Allocate new HNSW label
         new_index_id = self.next_index_id
 
+        # 7. Insert new vector
         self.index.add_items(
             vector,
             new_index_id
         )
 
+        # 8. Update logical storage
         self.document[doc_id] = document
         self.vector[doc_id] = vector
         self.metadata[doc_id] = metadata
 
+        # 9. Update both mappings
         self.index_ids[doc_id] = new_index_id
         self.hnsw_to_doc[new_index_id] = doc_id
 
+        # 10. Advance label counter
         self.next_index_id += 1
 
         return True
@@ -379,4 +493,79 @@ class VectorDB:
             "failed": len(errors),
             "errors": errors,
             "added_ids": added_ids
+        }
+
+    def rebuild_index(self):
+
+        # 1. Collect active documents
+        active_docs = []
+        active_vectors = []
+
+        for doc_id, document in enumerate(self.document):
+
+            if document is None:
+                continue
+
+            vector = self.vector[doc_id]
+
+            if vector is None:
+                continue
+
+            active_docs.append(doc_id)
+            active_vectors.append(vector)
+
+        active_count = len(active_docs)
+
+        # 2. Create a completely fresh HNSW index
+        new_index = hnswlib.Index(
+            space="cosine",
+            dim=self.dimension
+        )
+
+        new_index.init_index(
+            max_elements=self.max_elements,
+            ef_construction=200,
+            M=16
+        )
+
+        new_index.set_ef(50)
+
+        # 3. Create clean HNSW IDs
+        new_index_ids = np.arange(
+            active_count,
+            dtype=np.int64
+        )
+
+        # 4. Insert active vectors
+        if active_count > 0:
+            new_index.add_items(
+                np.asarray(
+                    active_vectors,
+                    dtype=np.float32
+                ),
+                new_index_ids
+            )
+
+        # 5. Replace old index
+        self.index = new_index
+
+        # 6. Rebuild mappings
+        self.index_ids = {}
+        self.hnsw_to_doc = {}
+
+        for doc_id, index_id in zip(
+                active_docs,
+                new_index_ids
+        ):
+            index_id = int(index_id)
+
+            self.index_ids[doc_id] = index_id
+            self.hnsw_to_doc[index_id] = doc_id
+
+        # 7. Next HNSW ID
+        self.next_index_id = active_count
+
+        return {
+            "active_documents": active_count,
+            "hnsw_count": self.index.get_current_count()
         }
