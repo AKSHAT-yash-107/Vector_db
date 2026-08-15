@@ -2,6 +2,7 @@ import json
 import numpy as np
 import hnswlib
 import os
+
 class VectorDB:
     def __init__(self):
         self.document = []
@@ -19,6 +20,7 @@ class VectorDB:
         self.index.set_ef(50)#ef controls how many candidates HNSW considers during search.
         self.index_ids = {}
         self.next_index_id = 0
+        self.hnsw_to_doc = {}
 
     def add(self, document, vector, metadata=None):
 
@@ -37,6 +39,7 @@ class VectorDB:
         )
 
         self.index_ids[doc_id] = index_id
+        self.hnsw_to_doc[index_id] = doc_id ## filtering during ann traversal
         self.next_index_id += 1
 
         return doc_id
@@ -94,6 +97,7 @@ class VectorDB:
                 active_vectors.append(vector)
                 active_ids.append(i)
                 self.index_ids[i] = i
+                self.hnsw_to_doc[i] = i
 
         if active_vectors:
             self.index.add_items(
@@ -112,42 +116,42 @@ class VectorDB:
             dtype=np.float32
         )
 
+        filter_fn = None
+
+        if filter is not None:
+            def filter_fn(hnsw_id):
+                return self.matches_filter(
+                    hnsw_id,
+                    filter
+                )
+
         labels, distances = self.index.knn_query(
             query_vector,
-            k=k
+            k=k,
+            num_threads=1,
+            filter=filter_fn
         )
 
         results = []
 
         for i in range(len(labels[0])):
 
-            idx = labels[0][i]
+            hnsw_id = labels[0][i]
 
-            if self.document[idx] is None:
+            # HNSW ID -> Document ID
+            doc_id = self.hnsw_to_doc[hnsw_id]
+
+            if self.document[doc_id] is None:
                 continue
-
-            # Metadata filtering
-            if filter is not None:
-
-                match = True
-
-                for key, value in filter.items():
-
-                    if self.metadata[idx].get(key) != value:
-                        match = False
-                        break
-
-                if not match:
-                    continue
 
             distance = distances[0][i]
             similarity = 1 - distance
 
             results.append(
                 (
-                    self.document[idx],
+                    self.document[doc_id],
                     similarity,
-                    self.metadata[idx]
+                    self.metadata[doc_id]
                 )
             )
 
@@ -187,30 +191,39 @@ class VectorDB:
         # Old HNSW entry
         old_index_id = self.index_ids[doc_id]
 
-        print("Document ID:", doc_id)
-        print("Index mapping:", self.index_ids)
-        print("Old HNSW ID:", old_index_id)
-        print("HNSW count:", self.index.get_current_count())
-
         self.index.mark_deleted(old_index_id)
 
-        # Create new vector
-        vector = np.asarray(vector, dtype=np.float32)
+        vector = np.asarray(
+            vector,
+            dtype=np.float32
+        )
 
-        # New HNSW ID
         new_index_id = self.next_index_id
 
-        self.index.add_items(vector, new_index_id)
+        self.index.add_items(
+            vector,
+            new_index_id
+        )
 
-        # Update database record
         self.document[doc_id] = document
         self.vector[doc_id] = vector
         self.metadata[doc_id] = metadata
 
-        # Update mapping
         self.index_ids[doc_id] = new_index_id
+        self.hnsw_to_doc[new_index_id] = doc_id
 
-        # Move counter forward
         self.next_index_id += 1
+
+        return True
+    def matches_filter(self, hnsw_id, filter):
+
+        doc_id = self.hnsw_to_doc[hnsw_id]
+
+        metadata = self.metadata[doc_id]
+
+        for key, value in filter.items():
+
+            if metadata.get(key) != value:
+                return False
 
         return True
