@@ -43,6 +43,29 @@ VectorDB
 - Search edge-case handling
 - PDF ingestion pipeline
 
+
+## Performance
+
+Benchmarked locally on 384-dimensional vectors using HNSW
+with `M=16`, `ef=50`, and `k=10`.
+
+| Dataset | Insert Throughput | Avg Search | P95 Search | P99 Search |
+|--------:|------------------:|-----------:|-----------:|-----------:|
+| 1K      | 19,118 vec/s      | 0.166 ms   | 0.231 ms   | 0.429 ms   |
+| 5K      | 5,374 vec/s       | 0.599 ms   | 0.912 ms   | 1.214 ms   |
+| 10K     | 3,123 vec/s       | 1.226 ms   | 2.350 ms   | 2.628 ms   |
+
+Benchmark configuration:
+
+- Vector dimension: 384
+- Top-k: 10
+- Queries: 100
+- HNSW `M`: 16
+- HNSW `ef`: 50
+
+Search latency increases as the index grows, while insertion
+throughput decreases due to the additional HNSW graph construction
+work.
 ## Core Design
 
 ### Logical vs Physical IDs
