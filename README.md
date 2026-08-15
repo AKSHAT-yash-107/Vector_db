@@ -9,7 +9,56 @@ Instead of using an existing vector database such as Chroma,
 FAISS, or Pinecone, this project implements the core storage,
 indexing, retrieval, persistence, and lifecycle mechanisms directly.
 
-## Architecture
+
+## Roadmap
+
+### Basic V1 — Complete
+
+- [x] Vector storage
+- [x] Cosine similarity search
+- [x] HNSW approximate nearest-neighbor indexing
+- [x] CRUD operations
+- [x] Metadata filtering
+- [x] Logical document ID ↔ HNSW index ID mapping
+- [x] Update-safe index ID allocation
+- [x] Per-document vector validation
+- [x] Partial-success batch ingestion
+- [x] Persistent database state
+- [x] Soft deletion
+- [x] HNSW index rebuild / compaction
+- [x] PDF ingestion pipeline
+- [x] Automated test suite
+- [x] Performance benchmarking
+
+### Advanced V1 — In Progress
+
+- [ ] Metadata indexes for faster filter evaluation
+- [ ] Pre-filtering during ANN traversal
+- [ ] Efficient filtered top-k retrieval
+- [ ] Filter-aware candidate selection
+- [ ] Query planning for filtered search
+- [ ] Recall evaluation for ANN search
+- [ ] Search performance evaluation across different `ef` values
+
+### Advanced V2 — Planned
+
+- [ ] Hybrid lexical + vector retrieval
+- [ ] BM25 + ANN retrieval
+- [ ] Reranking
+- [ ] Improved persistence layer
+- [ ] Larger-scale benchmarks
+- [ ] Memory and storage optimization
+- [ ] Concurrent query support
+
+### Future
+
+- [ ] WAL / crash recovery
+- [ ] Configurable index capacity
+- [ ] Sharding
+- [ ] Distributed indexing
+- [ ] API server
+- [ ] Authentication and multi-user isolation
+- [ ] ## Architecture
 
 PDF / Text
     ↓
