@@ -120,6 +120,24 @@ Therefore deleted entries can remain in the physical index.
 `rebuild_index()` reconstructs the index using only
 active vectors and rebuilds the ID mappings.
 
+
+
+## Testing
+
+VectorDB currently has 18 automated tests covering:
+
+- document insertion and validation
+- vector validation
+- batch ingestion
+- ANN search
+- metadata filtering
+- updates
+- deletion
+- persistence
+- index rebuilding / compaction
+
+```text
+18 passed in 0.17s
 ## Example
 
 ```python
